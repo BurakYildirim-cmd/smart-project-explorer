@@ -9,42 +9,32 @@
     "build": "electron-builder --win --x64",
     "build-linux": "electron-builder --linux"
   },
-
   "engines": {
-    "node": ">=18 <=20"
+    "node": ">=22.12.0"
   },
-
   "build": {
     "appId": "com.smartexplorer.app",
     "productName": "Smart Project Explorer",
-
     "directories": {
       "output": "dist"
     },
-
     "files": [
       "**/*",
       "!dist",
       "!node_modules"
     ],
-
     "win": {
       "target": "portable",
       "icon": "build/icon.ico"
     },
-
     "linux": {
       "target": "AppImage"
     }
   },
-
+  "dependencies": {
+    "electron": "^41.7.1"
+  },
   "devDependencies": {
-<<<<<<< HEAD
-    "electron": "36.3.1",
-    "electron-builder": "26.0.12"
-=======
-    "electron": "^36.9.5",
-    "electron-builder": "^26.0.12"
->>>>>>> 9fdd9c4 (fix: electron upgrade + dependency cleanup)
+    "electron-builder": "^26.15.3"
   }
 }
