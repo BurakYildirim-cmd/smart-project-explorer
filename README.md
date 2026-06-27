@@ -25,13 +25,31 @@ Electron tabanlı masaüstü uygulaması. Proje dosyalarını hızlı ve basit �
 
 ## 🚀 Kurulum
 
-### Repoyu klonla
+### 1. Repoyu klonla
 
 ```bash
 git clone https://github.com/BurakYildirim-cmd/smart-project-explorer.git
 cd smart-project-explorer
+```
 
-Bağımlılıkları yükle
+### 2. Bağımlılıkları yükle
+```bash
 npm ci
+```
+### 3. Uygulamayı başlat
+```bash
+npm start
+```
 
-
+### Development Mode
+```bash
+npm run dev
+```
+### Build (Windows)
+```bash
+npm run build
+```
+### Linux Build
+```bash
+npm run build-linux
+```
