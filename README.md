@@ -16,7 +16,7 @@ npm
 
 🚀 Kurulum
 1. Repoyu klonla
-git clone https://github.com/USER/smart-project-explorer.git
+git clone https://github.com/BurakYildirim-cmd/smart-project-explorer.git
 cd smart-project-explorer
 2. Bağımlılıkları yükle (PRO yöntem)
 npm ci
