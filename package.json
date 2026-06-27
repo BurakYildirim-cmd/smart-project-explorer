@@ -39,7 +39,12 @@
   },
 
   "devDependencies": {
+<<<<<<< HEAD
     "electron": "36.3.1",
     "electron-builder": "26.0.12"
+=======
+    "electron": "^36.9.5",
+    "electron-builder": "^26.0.12"
+>>>>>>> 9fdd9c4 (fix: electron upgrade + dependency cleanup)
   }
 }
