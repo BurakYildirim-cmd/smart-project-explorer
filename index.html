@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Smart Project Explorer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/eclipse.min.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+input{outline:none;border:none;background:none}
+button{cursor:pointer;font-family:inherit;border:none;background:none}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--sb,#30363D);border-radius:3px}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:0.4}50%{opacity:0.8}}
+@keyframes jumpFlash{0%{background:rgba(124,58,237,0.45)}100%{background:rgba(124,58,237,0)}}
+body{margin:0;overflow:hidden;height:100vh}
+.cm-editor-host{height:100%;width:100%}
+.cm-editor-host .CodeMirror{height:100%;font-family:'JetBrains Mono','Fira Code',monospace;font-size:12.5px;line-height:1.65;background:transparent !important}
+.cm-editor-host .CodeMirror-gutters{background:transparent !important;border-right:1px solid var(--cm-border,#30363D)}
+.cm-editor-host .CodeMirror-linenumber{color:var(--cm-dim,#484F58)}
+.cm-jump-flash{animation:jumpFlash 1.3s ease-out}
+.cm-searching{background:rgba(247,195,30,0.35) !important;border-radius:2px}
+.cm-search-current{background:rgba(247,195,30,0.7) !important;border-radius:2px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/shell/shell.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+<script>
+const {useState,useMemo,useCallback,useRef,useEffect}=React;
+
+const TH={
+  dark:{bg:"#0D1117",surf:"#161B22",card:"#1C2128",hover:"#21262D",border:"#30363D",accent:"#7C3AED",acBg:"rgba(124,58,237,0.13)",text:"#E6EDF3",sub:"#8B949E",dim:"#484F58"},
+  light:{bg:"#F6F8FA",surf:"#FFFFFF",card:"#F0F2F5",hover:"#E8EAED",border:"#D0D7DE",accent:"#7C3AED",acBg:"rgba(124,58,237,0.08)",text:"#1C2128",sub:"#57606A",dim:"#8C959F"}
+};
+
+const FT={
+  python:{label:"Python",color:"#3B82F6"},
+  javascript:{label:"JavaScript",color:"#F7DF1E"},
+  typescript:{label:"TypeScript",color:"#3178C6"},
+  json:{label:"JSON",color:"#F59E0B"},
+  markdown:{label:"Markdown",color:"#10B981"},
+  images:{label:"Görseller",color:"#EC4899"},
+  audio:{label:"Ses",color:"#8B5CF6"},
+  config:{label:"Config",color:"#F97316"},
+  text:{label:"Metin",color:"#6B7280"}
+};
+
+function mapExtToMode(name){
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  const m={
+    py:'python',
+    js:'javascript',jsx:'javascript',mjs:'javascript',cjs:'javascript',
+    ts:'text/typescript',tsx:'text/typescript',
+    json:{name:'javascript',json:true},
+    md:'markdown',mdx:'markdown',
+    html:'htmlmixed',htm:'htmlmixed',xml:'xml',svg:'xml',
+    css:'css',
+    yaml:'yaml',yml:'yaml',
+    sh:'shell',bash:'shell',
+  };
+  return m[ext]||'text/plain';
+}
+
+function cmFindNext(cm,query){
+  if(!query)return null;
+  let cur=cm.getSearchCursor(query,cm.getCursor('to'),{caseFold:true});
+  if(cur.findNext()){cm.setSelection(cur.from(),cur.to());cm.scrollIntoView({from:cur.from(),to:cur.to()},80);return cur.from();}
+  cur=cm.getSearchCursor(query,{line:0,ch:0},{caseFold:true});
+  if(cur.findNext()){cm.setSelection(cur.from(),cur.to());cm.scrollIntoView({from:cur.from(),to:cur.to()},80);return cur.from();}
+  return null;
+}
+function cmFindPrev(cm,query){
+  if(!query)return null;
+  let cur=cm.getSearchCursor(query,cm.getCursor('from'),{caseFold:true});
+  if(cur.findPrevious()){cm.setSelection(cur.from(),cur.to());cm.scrollIntoView({from:cur.from(),to:cur.to()},80);return cur.from();}
+  const ll=cm.lastLine();
+  cur=cm.getSearchCursor(query,{line:ll,ch:cm.getLine(ll).length},{caseFold:true});
+  if(cur.findPrevious()){cm.setSelection(cur.from(),cur.to());cm.scrollIntoView({from:cur.from(),to:cur.to()},80);return cur.from();}
+  return null;
+}
+function cmCountMatches(cm,query){
+  if(!query)return 0;
+  let n=0;const cur=cm.getSearchCursor(query,{line:0,ch:0},{caseFold:true});
+  while(cur.findNext())n++;
+  return n;
+}
+function makeSearchOverlay(query){
+  const esc=query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const re=new RegExp(esc,'gi');
+  return {token(stream){
+    re.lastIndex=stream.pos;
+    const m=re.exec(stream.string);
+    if(m&&m.index===stream.pos){stream.pos+=m[0].length||1;return 'searching';}
+    else if(m){stream.pos=m.index;}
+    else{stream.skipToEnd();}
+  }};
+}
+
+function CodeEditor({fileId,fileName,fileCode,dark,jumpTarget,searchQuery,onDirty,apiRef,saveKeyRef}){
+  const hostRef=useRef(null);
+  const cmRef=useRef(null);
+  const docsRef=useRef(new Map());
+  const overlayRef=useRef(null);
+
+  useEffect(()=>{
+    const cm=CodeMirror(hostRef.current,{
+      lineNumbers:true,
+      theme:dark?'material-darker':'eclipse',
+      matchBrackets:true,
+      styleActiveLine:true,
+      tabSize:2,
+      viewportMargin:60,
+      extraKeys:{
+        "Ctrl-S":()=>{saveKeyRef&&saveKeyRef.current&&saveKeyRef.current();return false;},
+        "Cmd-S":()=>{saveKeyRef&&saveKeyRef.current&&saveKeyRef.current();return false;},
+      },
+    });
+    cmRef.current=cm;
+    cm.on('change',()=>{ onDirty&&onDirty(); });
+    if(apiRef)apiRef.current={
+      getValue:()=>cm.getValue(),
+      findNext:q=>cmFindNext(cm,q),
+      findPrev:q=>cmFindPrev(cm,q),
+      countMatches:q=>cmCountMatches(cm,q),
+      focus:()=>cm.focus(),
+    };
+    return ()=>{cm.toTextArea&&cm.toTextArea();};
+  },[]);
+
+  useEffect(()=>{cmRef.current&&cmRef.current.setOption('theme',dark?'material-darker':'eclipse');},[dark]);
+
+  useEffect(()=>{
+    const cm=cmRef.current;
+    if(!cm)return;
+    let entry=docsRef.current.get(fileId);
+    if(!entry){
+      const mode=mapExtToMode(fileName||'');
+      const doc=CodeMirror.Doc(fileCode||'',mode);
+      entry={doc};
+      docsRef.current.set(fileId,entry);
+    }
+    cm.swapDoc(entry.doc);
+    requestAnimationFrame(()=>cm.refresh());
+  },[fileId]);
+
+  useEffect(()=>{
+    const cm=cmRef.current;
+    if(!cm||!jumpTarget)return;
+    requestAnimationFrame(()=>{
+      cm.refresh();
+      const ln=Math.max(0,jumpTarget.line-1);
+      cm.setCursor({line:ln,ch:0});
+      cm.scrollIntoView({line:ln,ch:0},120);
+      cm.addLineClass(ln,'background','cm-jump-flash');
+      setTimeout(()=>{try{cm.removeLineClass(ln,'background','cm-jump-flash');}catch(e){}},1300);
+      cm.focus();
+    });
+  },[jumpTarget]);
+
+  useEffect(()=>{
+    const cm=cmRef.current;
+    if(!cm)return;
+    if(overlayRef.current){cm.removeOverlay(overlayRef.current);overlayRef.current=null;}
+    if(searchQuery){
+      const ov=makeSearchOverlay(searchQuery);
+      cm.addOverlay(ov);
+      overlayRef.current=ov;
+    }
+  },[searchQuery,fileId]);
+
+  return React.createElement("div",{ref:hostRef,className:"cm-editor-host"});
+}
+
+function App(){
+  const[dark,setDark]=useState(true);
+  const[files,setFiles]=useState([]);
+  const[selCat,setSelCat]=useState("all");
+  const[selFile,setSelFile]=useState(null);
+  const[q,setQ]=useState("");
+  const[favs,setFavs]=useState(new Set());
+  const[recent,setRecent]=useState([]);
+  const[tab,setTab]=useState("preview");
+  const[analyzing,setAnalyzing]=useState(false);
+  const[aiText,setAiText]=useState(null);
+  const[hovRow,setHovRow]=useState(null);
+  const[hovCat,setHovCat]=useState(null);
+  const[projectName,setProjectName]=useState("Smart Explorer");
+  const[loading,setLoading]=useState(false);
+  const[jumpTarget,setJumpTarget]=useState(null);
+  const[codeSearch,setCodeSearch]=useState("");
+  const[matchInfo,setMatchInfo]=useState({count:0,idx:0});
+  const[dirtyIds,setDirtyIds]=useState(()=>new Set());
+  const[saving,setSaving]=useState(false);
+  const cmApiRef=useRef(null);
+
+  const t=dark?TH.dark:TH.light;
+  const fc=FT[selFile?.ft]||{label:"Dosya",color:"#6B7280"};
+
+  const openFolder=async()=>{
+    setLoading(true);
+    try{
+      const result=await window.electronAPI.openFolder();
+      if(!result)return;
+      setFiles(result);
+      setSelFile(null);setAiText(null);setQ("");setSelCat("all");setRecent([]);
+      if(result[0]){
+        const parts=result[0].path.replace(/\\/g,'/').split('/');
+        for(let i=parts.length-2;i>=0;i--){
+          if(parts[i]&&!result[0].name.includes(parts[i])){setProjectName(parts[i]);break;}
+        }
+      }
+    }finally{setLoading(false);}
+  };
+
+  const openSingleFile=async()=>{
+    const f=await window.electronAPI.openFile();
+    if(!f)return;
+    setFiles(prev=>prev.find(x=>x.id===f.id)?prev:[...prev,f]);
+    pickFile(f);
+  };
+
+  const shown=useMemo(()=>files.filter(f=>{
+    if(selCat!=="all"&&f.ft!==selCat)return false;
+    if(!q)return true;
+    const ql=q.toLowerCase();
+    if(f.name.toLowerCase().includes(ql))return true;
+    if(f.ast?.classes.some(c=>c.name.toLowerCase().includes(ql)))return true;
+    if(f.ast?.funcs.some(fn=>fn.name.toLowerCase().includes(ql)))return true;
+    if(f.ast?.imports.some(im=>im.name.toLowerCase().includes(ql)))return true;
+    return false;
+  }),[files,selCat,q]);
+
+  const pickFile=useCallback(f=>{
+    setSelFile(f);setAiText(null);setTab("preview");setJumpTarget(null);setCodeSearch("");setMatchInfo({count:0,idx:0});
+    setRecent(p=>[f.id,...p.filter(x=>x!==f.id)].slice(0,5));
+  },[]);
+
+  const jumpToCode=useCallback(line=>{
+    setTab("code");
+    setJumpTarget({line,t:Date.now()});
+  },[]);
+
+  const doSave=async()=>{
+    if(!selFile||!cmApiRef.current)return;
+    setSaving(true);
+    try{
+      const content=cmApiRef.current.getValue();
+      const res=await window.electronAPI.saveFile(selFile.path,content);
+      if(res?.ok){
+        setDirtyIds(p=>{const n=new Set(p);n.delete(selFile.id);return n;});
+        const updated={...selFile,code:content,lines:content.split('\n').length};
+        setFiles(prev=>prev.map(f=>f.id===selFile.id?updated:f));
+        setSelFile(updated);
+      }
+    }finally{setSaving(false);}
+  };
+
+  const toggleFav=useCallback((id,e)=>{
+    e.stopPropagation();
+    setFavs(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
+  },[]);
+
+  const doAnalyze=async()=>{
+    if(!selFile?.code)return;
+    setAnalyzing(true);setAiText(null);
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,
+          messages:[{role:"user",content:`Kıdemli bir yazılım geliştirici olarak "${selFile.name}" dosyasını analiz et:\n\`\`\`\n${selFile.code}\n\`\`\`\n\n**Kod Kalitesi:** X/10\n**Güçlü Yönler:** (2-3 madde)\n**Dikkat Edilmesi Gerekenler:**\n**İyileştirme Önerileri:** (3 öneri)\n\nKısa, Türkçe.`}]
+        })
+      });
+      const d=await res.json();
+      setAiText(d.content?.[0]?.text||"Yanıt alınamadı.");
+    }catch(err){setAiText(`Bağlantı hatası: ${err.message}`);}
+    setAnalyzing(false);
+  };
+
+  const recentFiles=files.filter(f=>recent.includes(f.id)).sort((a,b)=>recent.indexOf(a.id)-recent.indexOf(b.id));
+  const favFiles=files.filter(f=>favs.has(f.id));
+  const catEntries=[["all","Tümü","#7C3AED"],...Object.entries(FT).map(([k,v])=>[k,v.label,v.color])];
+  const isDirty=!!(selFile&&dirtyIds.has(selFile.id));
+
+  const onDirtyRef=useRef(()=>{});
+  useEffect(()=>{
+    onDirtyRef.current=()=>{ if(selFile)setDirtyIds(p=>{ if(p.has(selFile.id))return p; const n=new Set(p);n.add(selFile.id);return n; }); };
+  },[selFile]);
+
+  const saveKeyRef=useRef(()=>{});
+  useEffect(()=>{ saveKeyRef.current=()=>{ doSave(); }; });
+
+  useEffect(()=>{
+    if(!codeSearch){setMatchInfo({count:0});return;}
+    const id=setTimeout(()=>{
+      const c=cmApiRef.current?cmApiRef.current.countMatches(codeSearch):0;
+      setMatchInfo({count:c});
+    },150);
+    return ()=>clearTimeout(id);
+  },[codeSearch,selFile]);
+
+  const svg=(d,size=14,col,extra={})=>React.createElement("svg",{width:size,height:size,viewBox:"0 0 24 24",fill:"none",stroke:col||t.sub,strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round",...extra},React.createElement("path",{d}));
+  const StarIcon=(filled,col)=>React.createElement("svg",{width:11,height:11,viewBox:"0 0 24 24",fill:filled?col:"none",stroke:col,strokeWidth:2},React.createElement("polygon",{points:"12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"}));
+  const ClockIcon=()=>svg("M12 2a10 10 0 100 20A10 10 0 0012 2zM12 6v6l4 2",11,t.dim);
+  const ZapIcon=()=>svg("M13 2L3 14h9l-1 8 10-12h-9l1-8z",13,t.accent);
+  const Dot=({color,size=7})=>React.createElement("div",{style:{width:size,height:size,borderRadius:"50%",background:color,flexShrink:0}});
+
+  const S={
+    root:{display:"flex",flexDirection:"column",height:"100vh",background:t.bg,color:t.text,fontFamily:"'Inter',system-ui,sans-serif",fontSize:13,overflow:"hidden",userSelect:"none"},
+    titlebar:{height:38,flexShrink:0,display:"flex",alignItems:"center",padding:"0 12px",gap:8,background:t.surf,borderBottom:`1px solid ${t.border}`,WebkitAppRegion:"drag"},
+    header:{height:44,flexShrink:0,display:"flex",alignItems:"center",padding:"0 12px",gap:8,background:t.surf,borderBottom:`1px solid ${t.border}`},
+    body:{flex:1,display:"flex",overflow:"hidden"},
+    sidebar:{width:162,flexShrink:0,background:t.surf,borderRight:`1px solid ${t.border}`,display:"flex",flexDirection:"column",overflow:"hidden"},
+    sideLabel:{padding:"8px 10px 3px",color:t.dim,fontSize:10,fontWeight:600,letterSpacing:"0.06em",textTransform:"uppercase"},
+    filelist:{width:222,flexShrink:0,borderRight:`1px solid ${t.border}`,display:"flex",flexDirection:"column",overflow:"hidden"},
+    preview:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0},
+    statusbar:{height:24,flexShrink:0,display:"flex",alignItems:"center",padding:"0 12px",gap:10,background:t.surf,borderTop:`1px solid ${t.border}`,fontSize:10,color:t.dim},
+    iconBtn:{width:28,height:28,background:t.card,border:`1px solid ${t.border}`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",WebkitAppRegion:"no-drag"},
+    searchWrap:{flex:1,display:"flex",alignItems:"center",gap:6,background:t.card,border:`1px solid ${t.border}`,borderRadius:6,padding:"0 10px",height:30},
+    ndrag:{WebkitAppRegion:"no-drag"},
+  };
+
+  const EmptyState=()=>React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}},
+    React.createElement("div",{style:{width:72,height:72,borderRadius:18,background:t.acBg,border:`1px solid rgba(124,58,237,0.3)`,display:"flex",alignItems:"center",justifyContent:"center"}},
+      React.createElement("svg",{width:32,height:32,viewBox:"0 0 24 24",fill:"none",stroke:t.accent,strokeWidth:1.5},React.createElement("path",{d:"M3 3h6l2 3h10a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"}))
+    ),
+    React.createElement("div",{style:{fontSize:18,fontWeight:600,color:t.text}},"Smart Project Explorer"),
+    React.createElement("div",{style:{fontSize:13,color:t.sub,textAlign:"center",maxWidth:320,lineHeight:1.6}},
+      "Projenizi keşfetmek için bir klasör açın,",React.createElement("br"),"ya da doğrudan tek bir dosya açın."
+    ),
+    React.createElement("div",{style:{display:"flex",gap:10,marginTop:4}},
+      React.createElement("button",{onClick:openFolder,style:{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:7,fontSize:13,fontWeight:500,background:t.accent,color:"#fff",border:`1px solid ${t.accent}`,cursor:"pointer"}},
+        svg("M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z",14,"#fff"),"Klasör Aç"
+      ),
+      React.createElement("button",{onClick:openSingleFile,style:{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:7,fontSize:13,fontWeight:500,background:t.card,color:t.text,border:`1px solid ${t.border}`,cursor:"pointer"}},
+        svg("M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z",14,t.sub),"Dosya Aç"
+      )
+    )
+  );
+
+  return React.createElement("div",{style:S.root},
+
+    // TITLEBAR — Windows style: logo+actions left, window controls right
+    React.createElement("div",{style:S.titlebar},
+      // Logo + proje adı
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,...S.ndrag}},
+        React.createElement("div",{style:{width:18,height:18,background:t.accent,borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
+          React.createElement("svg",{width:10,height:10,viewBox:"0 0 24 24",fill:"white"},React.createElement("path",{d:"M3 3h18v2H3zM3 7h12v2H3zM3 11h18v2H3zM3 15h12v2H3zM3 19h18v2H3z"}))
+        ),
+        React.createElement("span",{style:{fontSize:12,color:t.sub,fontWeight:500}},projectName)
+      ),
+      // Dosya/Klasör aç butonları
+      React.createElement("div",{style:{display:"flex",gap:4,marginLeft:12,...S.ndrag}},
+        React.createElement("button",{onClick:openSingleFile,style:{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",borderRadius:4,fontSize:11,fontWeight:500,border:`1px solid ${t.border}`,color:t.sub,background:t.card,cursor:"pointer"}},
+          svg("M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z",11,t.sub),"Dosya Aç"
+        ),
+        React.createElement("button",{onClick:openFolder,style:{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",borderRadius:4,fontSize:11,fontWeight:500,border:`1px solid ${t.accent}`,color:t.accent,background:t.acBg,cursor:"pointer"}},
+          svg("M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z",11,t.accent),"Klasör Aç"
+        )
+      ),
+      // Windows pencere butonları — sağ üst
+      React.createElement("div",{style:{marginLeft:"auto",display:"flex",...S.ndrag}},
+        // Küçült
+        React.createElement("button",{
+          onClick:()=>window.electronAPI.minimize(),
+          title:"Küçült",
+          onMouseEnter:e=>{e.currentTarget.style.background=dark?"#21262D":"#E8EAED"},
+          onMouseLeave:e=>{e.currentTarget.style.background="transparent"},
+          style:{width:46,height:38,display:"flex",alignItems:"center",justifyContent:"center",background:"transparent",border:"none",color:t.sub,cursor:"pointer",transition:"background .15s"}
+        },
+          React.createElement("svg",{width:10,height:1,viewBox:"0 0 10 1"},React.createElement("rect",{width:10,height:1,fill:"currentColor"}))
+        ),
+        // Tam ekran / Geri al
+        React.createElement("button",{
+          onClick:()=>window.electronAPI.maximize(),
+          title:"Tam Ekran",
+          onMouseEnter:e=>{e.currentTarget.style.background=dark?"#21262D":"#E8EAED"},
+          onMouseLeave:e=>{e.currentTarget.style.background="transparent"},
+          style:{width:46,height:38,display:"flex",alignItems:"center",justifyContent:"center",background:"transparent",border:"none",color:t.sub,cursor:"pointer",transition:"background .15s"}
+        },
+          React.createElement("svg",{width:10,height:10,viewBox:"0 0 10 10",fill:"none",stroke:"currentColor",strokeWidth:1},React.createElement("rect",{x:0.5,y:0.5,width:9,height:9}))
+        ),
+        // Kapat
+        React.createElement("button",{
+          onClick:()=>window.electronAPI.close(),
+          title:"Kapat",
+          style:{width:46,height:38,display:"flex",alignItems:"center",justifyContent:"center",background:"transparent",border:"none",color:t.sub,cursor:"pointer",transition:"background .15s"},
+          onMouseEnter:e=>{e.currentTarget.style.background="#C42B1C";e.currentTarget.style.color="#fff"},
+          onMouseLeave:e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color=t.sub}
+        },
+          React.createElement("svg",{width:10,height:10,viewBox:"0 0 10 10",fill:"none",stroke:"currentColor",strokeWidth:1.2},
+            React.createElement("line",{x1:0,y1:0,x2:10,y2:10}),
+            React.createElement("line",{x1:10,y1:0,x2:0,y2:10})
+          )
+        )
+      )
+    ),
+
+    // HEADER
+    React.createElement("header",{style:S.header},
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,minWidth:130}},
+        React.createElement("div",{style:{width:22,height:22,background:t.accent,borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center"}},
+          React.createElement("svg",{width:13,height:13,viewBox:"0 0 24 24",fill:"white"},React.createElement("path",{d:"M3 3h18v2H3zM3 7h12v2H3zM3 11h18v2H3zM3 15h12v2H3zM3 19h18v2H3z"}))
+        ),
+        React.createElement("span",{style:{fontWeight:600,fontSize:13,letterSpacing:"-0.01em"}},"Smart Explorer")
+      ),
+      React.createElement("div",{style:S.searchWrap},
+        React.createElement("svg",{width:14,height:14,viewBox:"0 0 24 24",fill:"none",stroke:t.dim,strokeWidth:2},React.createElement("circle",{cx:11,cy:11,r:8}),React.createElement("line",{x1:21,y1:21,x2:16.65,y2:16.65})),
+        React.createElement("input",{value:q,onChange:e=>setQ(e.target.value),placeholder:"Dosya, fonksiyon, class veya import ara...",style:{flex:1,color:t.text,fontSize:12,fontFamily:"inherit"}}),
+        q&&React.createElement("button",{onClick:()=>setQ(""),style:{display:"flex"}},
+          React.createElement("svg",{width:12,height:12,viewBox:"0 0 24 24",fill:"none",stroke:t.dim,strokeWidth:2},React.createElement("line",{x1:18,y1:6,x2:6,y2:18}),React.createElement("line",{x1:6,y1:6,x2:18,y2:18}))
+        )
+      ),
+      React.createElement("div",{style:{display:"flex",gap:4}},
+        React.createElement("button",{onClick:()=>setDark(d=>!d),style:S.iconBtn},
+          dark
+            ?React.createElement("svg",{width:14,height:14,viewBox:"0 0 24 24",fill:"none",stroke:t.sub,strokeWidth:2},React.createElement("circle",{cx:12,cy:12,r:5}),React.createElement("line",{x1:12,y1:1,x2:12,y2:3}),React.createElement("line",{x1:12,y1:21,x2:12,y2:23}),React.createElement("line",{x1:4.22,y1:4.22,x2:5.64,y2:5.64}),React.createElement("line",{x1:18.36,y1:18.36,x2:19.78,y2:19.78}),React.createElement("line",{x1:1,y1:12,x2:3,y2:12}),React.createElement("line",{x1:21,y1:12,x2:23,y2:12}),React.createElement("line",{x1:4.22,y1:19.78,x2:5.64,y2:18.36}),React.createElement("line",{x1:18.36,y1:5.64,x2:19.78,y2:4.22}))
+            :React.createElement("svg",{width:14,height:14,viewBox:"0 0 24 24",fill:"none",stroke:t.sub,strokeWidth:2},React.createElement("path",{d:"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"}))
+        )
+      )
+    ),
+
+    // BODY
+    React.createElement("div",{style:S.body},
+
+      // SIDEBAR
+      React.createElement("aside",{style:S.sidebar},
+        React.createElement("div",{style:{...S.sideLabel,paddingTop:10}},"Kategoriler"),
+        React.createElement("div",{style:{overflowY:"auto",flex:1}},
+          catEntries.map(([key,label,color])=>{
+            const cnt=key==="all"?files.length:files.filter(f=>f.ft===key).length;
+            if(cnt===0)return null;
+            const isSel=selCat===key,isHov=hovCat===key;
+            return React.createElement("div",{key,onClick:()=>setSelCat(key),onMouseEnter:()=>setHovCat(key),onMouseLeave:()=>setHovCat(null),
+              style:{display:"flex",alignItems:"center",gap:7,padding:"5px 10px 5px 8px",cursor:"pointer",
+                background:isSel?`${color}16`:(isHov?t.hover:"transparent"),
+                borderLeft:`2px solid ${isSel?color:"transparent"}`,transition:"background 0.1s"}},
+              React.createElement(Dot,{color,size:7}),
+              React.createElement("span",{style:{flex:1,fontSize:12,color:isSel?t.text:t.sub,fontWeight:isSel?500:400}},label),
+              React.createElement("span",{style:{fontSize:10,color:isSel?color:t.dim,background:isSel?`${color}20`:t.card,border:`1px solid ${isSel?color:t.border}`,borderRadius:8,padding:"1px 5px",fontWeight:isSel?600:400}},cnt)
+            );
+          }),
+          favFiles.length>0&&React.createElement(React.Fragment,null,
+            React.createElement("div",{style:{...S.sideLabel,marginTop:6,paddingTop:8,borderTop:`1px solid ${t.border}`}},"Favoriler"),
+            favFiles.map(f=>React.createElement("div",{key:f.id,onClick:()=>pickFile(f),
+              style:{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",cursor:"pointer",background:selFile?.id===f.id?t.acBg:"transparent",color:selFile?.id===f.id?t.text:t.sub}},
+              StarIcon(true,"#F59E0B"),
+              React.createElement("span",{style:{fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},f.name)
+            ))
+          ),
+          recentFiles.length>0&&React.createElement(React.Fragment,null,
+            React.createElement("div",{style:{...S.sideLabel,marginTop:6,paddingTop:8,borderTop:`1px solid ${t.border}`}},"Son Açılanlar"),
+            recentFiles.map(f=>React.createElement("div",{key:f.id,onClick:()=>pickFile(f),
+              style:{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",cursor:"pointer",background:selFile?.id===f.id?t.acBg:"transparent",color:selFile?.id===f.id?t.text:t.sub}},
+              React.createElement(ClockIcon),
+              React.createElement("span",{style:{fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},f.name)
+            ))
+          )
+        )
+      ),
+
+      // FILE LIST
+      React.createElement("div",{style:S.filelist},
+        React.createElement("div",{style:{padding:"5px 10px",borderBottom:`1px solid ${t.border}`,fontSize:11,color:t.dim,background:t.surf,flexShrink:0}},
+          `${shown.length} dosya`,q&&` — "${q}" için`
+        ),
+        React.createElement("div",{style:{flex:1,overflowY:"auto"}},
+          shown.length===0&&files.length===0
+            ?React.createElement("div",{style:{padding:16,textAlign:"center",color:t.dim,fontSize:12,lineHeight:1.7}},
+              loading?"Yükleniyor...":"Henüz dosya yok.",React.createElement("br"),
+              !loading&&React.createElement("span",{style:{color:t.accent,cursor:"pointer"},onClick:openFolder},"Klasör aç →")
+            )
+            :shown.length===0
+              ?React.createElement("div",{style:{padding:20,textAlign:"center",color:t.dim,fontSize:12}},"Eşleşen dosya bulunamadı")
+              :shown.map(f=>{
+                const ftype=FT[f.ft]||{color:"#6B7280"};
+                const isSel=selFile?.id===f.id,isFav=favs.has(f.id),isHov=hovRow===f.id;
+                let matchReason=null;
+                if(q){
+                  const ql=q.toLowerCase();
+                  if(!f.name.toLowerCase().includes(ql)){
+                    const mf=f.ast?.funcs?.find(fn=>fn.name.toLowerCase().includes(ql));
+                    const mc=f.ast?.classes?.find(c=>c.name.toLowerCase().includes(ql));
+                    const mi=f.ast?.imports?.find(im=>im.name.toLowerCase().includes(ql));
+                    if(mf)matchReason=`fn: ${mf.name}`;else if(mc)matchReason=`class: ${mc.name}`;else if(mi)matchReason=`import: ${mi.name}`;
+                  }
+                }
+                return React.createElement("div",{key:f.id,onClick:()=>pickFile(f),onMouseEnter:()=>setHovRow(f.id),onMouseLeave:()=>setHovRow(null),
+                  style:{padding:"7px 10px",cursor:"pointer",background:isSel?t.acBg:(isHov?t.hover:"transparent"),borderLeft:`2.5px solid ${isSel?ftype.color:"transparent"}`,transition:"background 0.1s"}},
+                  React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:4}},
+                    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:5,minWidth:0,flex:1}},
+                      React.createElement(Dot,{color:ftype.color,size:6}),
+                      React.createElement("span",{style:{fontSize:12,fontWeight:isSel?500:400,color:t.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},f.name)
+                    ),
+                    React.createElement("button",{onClick:e=>toggleFav(f.id,e),
+                      style:{background:"none",border:"none",padding:"2px",display:"flex",flexShrink:0,color:isFav?"#F59E0B":t.dim,opacity:isFav||isHov?1:0.3}},
+                      StarIcon(isFav,"#F59E0B")
+                    )
+                  ),
+                  React.createElement("div",{style:{display:"flex",alignItems:"center",gap:5,paddingLeft:11,marginTop:2,flexWrap:"wrap"}},
+                    React.createElement("span",{style:{fontSize:10,color:t.dim}},f.size),
+                    React.createElement("span",{style:{fontSize:10,color:t.dim}},"·"),
+                    React.createElement("span",{style:{fontSize:10,color:t.dim}},f.mod),
+                    f.lines&&React.createElement("span",{style:{fontSize:10,color:t.dim}},`${f.lines} sat.`),
+                    matchReason&&React.createElement("span",{style:{fontSize:10,color:ftype.color,background:`${ftype.color}18`,borderRadius:3,padding:"0 4px"}},matchReason)
+                  )
+                );
+              })
+        )
+      ),
+
+      // PREVIEW PANEL
+      React.createElement("div",{style:S.preview},
+        !selFile
+          ?React.createElement(EmptyState)
+          :React.createElement(React.Fragment,null,
+            React.createElement("div",{style:{height:3,background:fc.color,flexShrink:0}}),
+            React.createElement("div",{style:{height:40,display:"flex",alignItems:"center",padding:"0 12px",gap:6,borderBottom:`1px solid ${t.border}`,background:t.surf,flexShrink:0}},
+              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:5,flex:1,minWidth:0}},
+                React.createElement(Dot,{color:fc.color,size:8}),
+                React.createElement("span",{style:{fontSize:12,fontWeight:500,color:t.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},selFile.name),
+                isDirty&&React.createElement("span",{title:"Kaydedilmemiş değişiklikler",style:{width:6,height:6,borderRadius:"50%",background:"#F59E0B",flexShrink:0}}),
+                React.createElement("span",{style:{fontSize:10,color:t.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontFamily:"monospace"}},selFile.path)
+              ),
+              React.createElement("div",{style:{display:"flex",gap:3}},
+                [["preview","Önizleme"],["code","Kod"],...(selFile.ast?[["ai","AI Analiz"]]:[])]
+                  .map(([id,label])=>React.createElement("button",{key:id,
+                    onClick:()=>{setTab(id);if(id==="ai"&&!aiText&&!analyzing)doAnalyze();},
+                    style:{padding:"3px 9px",fontSize:11,border:`1px solid ${tab===id?fc.color:t.border}`,borderRadius:4,background:tab===id?`${fc.color}18`:t.card,color:tab===id?fc.color:t.sub,fontFamily:"inherit",transition:"all 0.15s",cursor:"pointer"}
+                  },label))
+              )
+            ),
+
+            React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}},
+
+              (tab==="preview"||tab==="ai")&&React.createElement("div",{style:{flex:1,overflowY:"auto",padding:16}},
+
+                tab==="preview"&&React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+                  React.createElement("div",{style:{display:"flex",gap:8,flexWrap:"wrap"}},
+                    [["Boyut",selFile.size],["Değiştirildi",selFile.mod],...(selFile.lines?[["Satır",selFile.lines]]:[]),["Tür",fc.label]].map(([k,v])=>
+                      React.createElement("div",{key:k,style:{background:t.card,border:`1px solid ${t.border}`,borderRadius:6,padding:"6px 10px",minWidth:70}},
+                        React.createElement("div",{style:{fontSize:9,color:t.dim,marginBottom:2,textTransform:"uppercase",letterSpacing:"0.04em"}},k),
+                        React.createElement("div",{style:{fontSize:13,fontWeight:500,color:k==="Tür"?fc.color:t.text}},String(v))
+                      )
+                    )
+                  ),
+                  selFile.ft==="images"&&React.createElement("div",{style:{display:"flex",justifyContent:"center",padding:"10px 0"}},
+                    React.createElement("img",{src:`file://${selFile.path}`,style:{maxWidth:"100%",maxHeight:300,borderRadius:8,border:`1px solid ${t.border}`}})
+                  ),
+                  selFile.ast&&React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+                    [["Sınıflar",selFile.ast.classes,"#3B82F6"],["Fonksiyonlar",selFile.ast.funcs,"#10B981"],["Import'lar",selFile.ast.imports,"#F59E0B"]]
+                    .map(([lbl,items,col])=>items&&items.length>0&&React.createElement("div",{key:lbl},
+                      React.createElement("div",{style:{fontSize:10,color:t.dim,marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}},`${lbl} (${items.length})`),
+                      React.createElement("div",{style:{display:"flex",gap:4,flexWrap:"wrap"}},
+                        items.map(item=>{
+                          const isM=q&&item.name.toLowerCase().includes(q.toLowerCase());
+                          const canJump=item.line!=null&&selFile.code;
+                          return React.createElement("span",{key:item.name+"_"+item.line,
+                            onClick:canJump?()=>jumpToCode(item.line):undefined,
+                            title:canJump?`Satır ${item.line}'a git`:undefined,
+                            style:{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,padding:"3px 7px",borderRadius:4,fontFamily:"monospace",background:isM?`${col}25`:t.card,border:`1px solid ${isM?col:t.border}`,color:isM?col:t.sub,cursor:canJump?"pointer":"default"}
+                          },
+                            item.name,
+                            canJump&&React.createElement("span",{style:{fontSize:9,color:t.dim}},`:${item.line}`)
+                          );
+                        })
+                      )
+                    ))
+                  ),
+                  !selFile.ast&&!selFile.code&&React.createElement("div",{style:{color:t.dim,fontSize:12,padding:"8px 0"}},"Bu dosya türü için önizleme desteklenmiyor.")
+                ),
+
+                tab==="ai"&&React.createElement("div",null,
+                  analyzing&&React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+                    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,color:t.sub,fontSize:12,marginBottom:4}},
+                      React.createElement("svg",{width:14,height:14,viewBox:"0 0 24 24",fill:"none",stroke:t.accent,strokeWidth:2,style:{animation:"spin 1s linear infinite"}},React.createElement("path",{d:"M21 12a9 9 0 11-6.219-8.56"})),
+                      React.createElement("span",null,"Kod analiz ediliyor...")
+                    ),
+                    [72,55,80,48,62].map((w,i)=>React.createElement("div",{key:i,style:{height:12,width:`${w}%`,background:t.card,borderRadius:3,border:`1px solid ${t.border}`,animation:"pulse 1.5s ease-in-out infinite",animationDelay:`${i*0.15}s`}}))
+                  ),
+                  !analyzing&&aiText&&React.createElement("div",{style:{fontSize:13,lineHeight:1.75,color:t.text,whiteSpace:"pre-wrap"}},aiText),
+                  !analyzing&&!aiText&&React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10,alignItems:"flex-start"}},
+                    React.createElement("div",{style:{color:t.sub,fontSize:12}},`${selFile.name} dosyasını AI ile analiz et`),
+                    React.createElement("button",{onClick:doAnalyze,style:{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",background:t.acBg,border:`1px solid ${t.accent}`,borderRadius:6,color:t.accent,fontSize:12,fontFamily:"inherit",cursor:"pointer"}},
+                      React.createElement(ZapIcon),"Analiz Et"
+                    )
+                  )
+                )
+              ),
+
+              // CODE TAB — persistent, never unmounted while a file is selected, just hidden
+              React.createElement("div",{style:{display:tab==="code"?"flex":"none",flexDirection:"column",flex:1,overflow:"hidden",minHeight:0}},
+                selFile.code!=null&&React.createElement(React.Fragment,null,
+                  React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderBottom:`1px solid ${t.border}`,background:t.surf,flexShrink:0}},
+                    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,flex:1,background:t.card,border:`1px solid ${t.border}`,borderRadius:6,padding:"0 8px",height:28}},
+                      React.createElement("svg",{width:12,height:12,viewBox:"0 0 24 24",fill:"none",stroke:t.dim,strokeWidth:2,style:{flexShrink:0}},React.createElement("circle",{cx:11,cy:11,r:8}),React.createElement("line",{x1:21,y1:21,x2:16.65,y2:16.65})),
+                      React.createElement("input",{
+                        value:codeSearch,
+                        onChange:e=>setCodeSearch(e.target.value),
+                        placeholder:"Kod içinde ara...",
+                        onKeyDown:e=>{
+                          if(e.key==="Enter"){e.preventDefault();e.shiftKey?cmApiRef.current?.findPrev(codeSearch):cmApiRef.current?.findNext(codeSearch);}
+                          if(e.key==="Escape"){setCodeSearch("");}
+                        },
+                        style:{flex:1,color:t.text,fontSize:11.5,fontFamily:"inherit",height:26}
+                      }),
+                      codeSearch&&React.createElement("span",{style:{fontSize:10,color:t.dim,whiteSpace:"nowrap",flexShrink:0}},`${matchInfo.count} eşleşme`),
+                      codeSearch&&React.createElement("button",{onClick:()=>setCodeSearch(""),style:{display:"flex",flexShrink:0}},
+                        React.createElement("svg",{width:11,height:11,viewBox:"0 0 24 24",fill:"none",stroke:t.dim,strokeWidth:2},React.createElement("line",{x1:18,y1:6,x2:6,y2:18}),React.createElement("line",{x1:6,y1:6,x2:18,y2:18}))
+                      )
+                    ),
+                    codeSearch&&React.createElement("button",{onClick:()=>cmApiRef.current?.findPrev(codeSearch),title:"Önceki eşleşme (Shift+Enter)",style:{...S.iconBtn,height:28}},
+                      React.createElement("svg",{width:12,height:12,viewBox:"0 0 24 24",fill:"none",stroke:t.sub,strokeWidth:2},React.createElement("line",{x1:12,y1:19,x2:12,y2:5}),React.createElement("polyline",{points:"5 12 12 5 19 12"}))
+                    ),
+                    codeSearch&&React.createElement("button",{onClick:()=>cmApiRef.current?.findNext(codeSearch),title:"Sonraki eşleşme (Enter)",style:{...S.iconBtn,height:28}},
+                      React.createElement("svg",{width:12,height:12,viewBox:"0 0 24 24",fill:"none",stroke:t.sub,strokeWidth:2},React.createElement("line",{x1:12,y1:5,x2:12,y2:19}),React.createElement("polyline",{points:"19 12 12 19 5 12"}))
+                    ),
+                    React.createElement("button",{onClick:doSave,disabled:!isDirty||saving,title:"Kaydet (Ctrl+S)",
+                      style:{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",height:28,borderRadius:6,fontSize:11,fontWeight:500,fontFamily:"inherit",
+                        border:`1px solid ${isDirty?t.accent:t.border}`,background:isDirty?t.acBg:t.card,color:isDirty?t.accent:t.dim,cursor:isDirty?"pointer":"default",flexShrink:0}},
+                      svg("M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",12,isDirty?t.accent:t.dim),
+                      saving?"Kaydediliyor...":(isDirty?"Kaydet":"Kaydedildi")
+                    )
+                  ),
+                  React.createElement("div",{style:{flex:1,overflow:"hidden",background:dark?"#0D1117":"#FFFFFF"}},
+                    React.createElement(CodeEditor,{
+                      fileId:selFile.id,fileName:selFile.name,fileCode:selFile.code,dark,
+                      jumpTarget,searchQuery:codeSearch,
+                      onDirty:()=>onDirtyRef.current&&onDirtyRef.current(),
+                      apiRef:cmApiRef,saveKeyRef
+                    })
+                  )
+                ),
+                selFile.code==null&&React.createElement("div",{style:{color:t.dim,fontSize:12,padding:16}},"Bu dosya türü için kod önizlemesi desteklenmiyor.")
+              )
+            )
+          )
+      )
+    ),
+
+    // STATUS BAR
+    React.createElement("footer",{style:S.statusbar},
+      React.createElement("span",null,`📁 ${projectName}`),
+      React.createElement("span",null,"·"),
+      React.createElement("span",null,`${files.length} dosya`),
+      files.length>0&&React.createElement("span",null,"·"),
+      ...Object.entries(FT).map(([k,v])=>{
+        const cnt=files.filter(f=>f.ft===k).length;
+        return cnt>0?React.createElement("span",{key:k,style:{color:v.color}},`${v.label} ${cnt}`):null;
+      }).filter(Boolean),
+      React.createElement("span",{style:{marginLeft:"auto",color:selFile?fc.color:t.dim}},selFile?.name||"")
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
