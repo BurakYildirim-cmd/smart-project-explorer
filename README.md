@@ -1,4 +1,4 @@
-# 🚀 Smart Project Explorer
+# Smart Project Explorer
 
 Electron tabanlı masaüstü uygulaması. Proje dosyalarını hızlı ve basit şekilde keşfetmek için geliştirilmiştir.
 
