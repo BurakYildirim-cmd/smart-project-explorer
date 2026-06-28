@@ -1,32 +1,52 @@
 # Smart Project Explorer
 
-Electron tabanlı masaüstü uygulaması. Proje dosyalarını hızlı ve basit şekilde keşfetmek için geliştirilmiştir.
+An Electron-based, AI-powered desktop code explorer. Built to quickly browse and edit project files, and to learn code step by step with the help of a local AI model.
 
 ---
 
-##  Özellikler
+## Features
 
--  Proje dosya yapısı görüntüleme  
--  Hızlı Electron arayüzü  
--  Modüler yapı (main / preload)  
--  Cross-platform destek (Windows / Linux)  
--  Portable build desteği  
+-  View your project's file structure in a tree view
+-  Create, rename, and delete files/folders — all from within the UI
+-  Code editor (CodeMirror) — syntax highlighting, search, line numbers
+-  In-file search and a preview strip of classes/functions/imports (click to jump to the relevant line)
+-  **AI Chat** — ask questions about your project using a local AI model
+-  **Learning Mode** — teaches a topic step by step; shows code for each step, validates the code you write in your file, and advances to the next step. Choose step detail level: **Normal** (logical chunks) or **Atomic** (line by line)
+-  Built-in terminal — run commands in the project directory
+-  Light / dark theme support
+-  Custom title bar (frameless window)
+-  Modular structure (main / preload / renderer)
+-  Cross-platform support (Windows / Linux)
+-  Portable build support
+
+### Connecting an AI Model
+
+To use a local AI model, just install [Ollama](https://ollama.com):
+
+```bash
+ollama run <model-name>
+```
+
+Once the model is running, select and connect it from the **Settings** screen in the app. No external API key or internet connection required — everything runs locally.
 
 ---
 
-##  Requirements
+## Requirements
 
 | Tool | Version |
-|------|--------|
+|------|---------|
 | Node.js | 20.x LTS (recommended) |
 | npm | Latest (comes with Node) |
 | Git | Latest |
 
-###  Notes
-- Node 20 LTS önerilir
-- Node 22+ bazı native Electron build paketlerinde uyumsuzluk çıkarabilir
+### Notes
 
-##  Installation
+- Node 20 LTS is recommended
+- Node 22+ may cause incompatibility with some native Electron build packages
+
+---
+
+## Installation
 
 ```bash
 git clone https://github.com/BurakYildirim-cmd/smart-project-explorer.git
@@ -36,14 +56,28 @@ npm start
 ```
 
 ### Development Mode
+
 ```bash
 npm run dev
 ```
+
 ### Build (Windows)
+
 ```bash
 npm run build
 ```
+
 ### Linux Build
+
 ```bash
 npm run build-linux
 ```
+
+---
+
+## Usage
+
+1. Open the app and select a project folder from the top-left
+2. Open the AI panel on the right (chat icon)
+3. Ask questions about your project in the **Chat** tab, or type a topic in the **Learning** tab to start learning step by step
+4. Right-click in the file tree to create, rename, or delete files/folders
