@@ -117,6 +117,36 @@ ipcMain.handle('scan-local-models', async () => {
   return found;
 });
 
+// ── Strip <think>…</think> blocks from model output ─────
+// Bazı Ollama/model sürümlerinde `think: false` parametresi çalışmıyor;
+// model düşünme metnini ham cevaba gömer. Üstelik bazı sürümler etiketleri
+// unicode-escape olarak yazar: \u003c = <  \u003e = >
+// Bu fonksiyon her iki formu da yakalar.
+function stripThinking(text) {
+  if (!text) return text;
+  // Ollama <> isaretlerini \u003c / \u003e olarak escape edebilir.
+  // Ayrica model <think> acilis etiketini hic yazmayip sadece kapanisi yazabilir.
+  // Her iki durumu da handle et.
+  let out = text
+    .replace(/\\u003c\/think\\u003e/gi, "</think>")
+    .replace(/\\u003c\/think>/gi,         "</think>")
+    .replace(/<\/think\\u003e/gi,         "</think>")
+    .replace(/\\u003cthink\\u003e/gi,    "<think>")
+    .replace(/\\u003cthink>/gi,             "<think>")
+    .replace(/<think\\u003e/gi,             "<think>");
+  // Kapali bloklar: <think>...</think>
+  out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  // Acilis etiketi yok ama kapanis var — icerigi basından kapanis sonrasina atla
+  if (!/<think>/i.test(out) && /<\/think>/i.test(out)) {
+    out = out.replace(/^[\s\S]*?<\/think>\s*/i, "");
+  }
+  // Kapanmayan acilis etiketi
+  if (/<think>/i.test(out) && !/<\/think>/i.test(out)) {
+    out = out.replace(/<think>[\s\S]*/gi, "");
+  }
+  return out.trim();
+}
+
 // ── Chat with the configured local model ────────────────
 ipcMain.handle('ai-chat', async (_e, { provider, baseUrl, model, messages, system }) => {
   try {
@@ -127,11 +157,14 @@ ipcMain.handle('ai-chat', async (_e, { provider, baseUrl, model, messages, syste
     if (provider === 'ollama') {
       const r = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages: fullMessages, stream: false }),
+        // think:false — qwen3 gibi "hybrid thinking" modellerde cevaptan önceki
+        // uzun <think> bloğunu kapatır; gereksiz gecikmeyi büyük ölçüde azaltır.
+        // Thinking desteklemeyen modeller bu alanı yok sayar, zararı olmaz.
+        body: JSON.stringify({ model, messages: fullMessages, stream: false, think: false }),
       });
       const d = await r.json();
       if (!r.ok) return { ok: false, error: d.error || `HTTP ${r.status}` };
-      return { ok: true, content: d.message?.content || '' };
+      return { ok: true, content: stripThinking(d.message?.content || '') };
     }
     // lmstudio / custom: OpenAI-compatible chat completions
     const r = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -140,7 +173,7 @@ ipcMain.handle('ai-chat', async (_e, { provider, baseUrl, model, messages, syste
     });
     const d = await r.json();
     if (!r.ok) return { ok: false, error: d.error?.message || `HTTP ${r.status}` };
-    return { ok: true, content: d.choices?.[0]?.message?.content || '' };
+    return { ok: true, content: stripThinking(d.choices?.[0]?.message?.content || '') };
   } catch (e) {
     return { ok: false, error: e.message || 'Bağlantı hatası' };
   }
