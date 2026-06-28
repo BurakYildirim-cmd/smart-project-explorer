@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -24,7 +24,8 @@ ipcMain.on('window-close', () => BrowserWindow.getFocusedWindow()?.close());
 ipcMain.handle('open-folder', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: 'Proje Klasörü Seç' });
   if (result.canceled || !result.filePaths[0]) return null;
-  return scanFolder(result.filePaths[0]);
+  const rootPath = result.filePaths[0];
+  return { files: scanFolder(rootPath), rootPath };
 });
 
 ipcMain.handle('open-file', async () => {
@@ -48,6 +49,100 @@ ipcMain.handle('save-file', (_event, { filePath, content }) => {
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+});
+
+// ── Settings persistence ────────────────────────────────
+const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
+
+function loadSettings() {
+  try { return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8')); } catch (e) { return {}; }
+}
+function saveSettingsToDisk(s) {
+  try { fs.writeFileSync(SETTINGS_PATH, JSON.stringify(s, null, 2), 'utf-8'); return true; } catch (e) { return false; }
+}
+
+ipcMain.handle('get-settings', () => loadSettings());
+ipcMain.handle('save-settings', (_e, settings) => {
+  const ok = saveSettingsToDisk(settings);
+  return { ok };
+});
+
+// ── Local AI model discovery ─────────────────────────────
+// We don't scan the filesystem for raw weight files (unreliable, slow,
+// and a .gguf alone isn't usable without a server). Instead we probe the
+// well-known local inference servers' HTTP APIs on their default ports.
+async function fetchWithTimeout(url, opts = {}, ms = 1500) {
+  return fetch(url, { ...opts, signal: AbortSignal.timeout(ms) });
+}
+
+ipcMain.handle('scan-local-models', async () => {
+  const found = [];
+
+  // Ollama — http://localhost:11434
+  try {
+    const r = await fetchWithTimeout('http://localhost:11434/api/tags');
+    if (r.ok) {
+      const d = await r.json();
+      for (const m of d.models || []) {
+        found.push({ provider: 'ollama', id: m.name, label: m.name, baseUrl: 'http://localhost:11434' });
+      }
+    }
+  } catch (e) {}
+
+  // LM Studio — http://localhost:1234 (OpenAI-compatible)
+  try {
+    const r = await fetchWithTimeout('http://localhost:1234/v1/models');
+    if (r.ok) {
+      const d = await r.json();
+      for (const m of d.data || []) {
+        found.push({ provider: 'lmstudio', id: m.id, label: m.id, baseUrl: 'http://localhost:1234' });
+      }
+    }
+  } catch (e) {}
+
+  // text-generation-webui / LocalAI / other OpenAI-compatible servers on common ports
+  for (const baseUrl of ['http://localhost:5000', 'http://localhost:8080']) {
+    try {
+      const r = await fetchWithTimeout(`${baseUrl}/v1/models`);
+      if (r.ok) {
+        const d = await r.json();
+        for (const m of d.data || []) {
+          found.push({ provider: 'custom', id: m.id, label: m.id, baseUrl });
+        }
+      }
+    } catch (e) {}
+  }
+
+  return found;
+});
+
+// ── Chat with the configured local model ────────────────
+ipcMain.handle('ai-chat', async (_e, { provider, baseUrl, model, messages, system }) => {
+  try {
+    // `system` taşıyıcı mesaj listesine en başa eklenir; aksi halde (önceki
+    // davranışta olduğu gibi) tamamen yok sayılır ve küçük modeller "SADECE
+    // JSON döndür" gibi katı talimatları hiç görmeden yanıt üretir.
+    const fullMessages = system ? [{ role: 'system', content: system }, ...messages] : messages;
+    if (provider === 'ollama') {
+      const r = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages: fullMessages, stream: false }),
+      });
+      const d = await r.json();
+      if (!r.ok) return { ok: false, error: d.error || `HTTP ${r.status}` };
+      return { ok: true, content: d.message?.content || '' };
+    }
+    // lmstudio / custom: OpenAI-compatible chat completions
+    const r = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages: fullMessages }),
+    });
+    const d = await r.json();
+    if (!r.ok) return { ok: false, error: d.error?.message || `HTTP ${r.status}` };
+    return { ok: true, content: d.choices?.[0]?.message?.content || '' };
+  } catch (e) {
+    return { ok: false, error: e.message || 'Bağlantı hatası' };
   }
 });
 
@@ -137,6 +232,102 @@ function scanFolder(folderPath, maxDepth=5, depth=0) {
   }
   return files;
 }
+
+ipcMain.handle('run-command', async (_e, cmd) => {
+  const { exec } = require('child_process');
+  return new Promise((resolve) => {
+    exec(cmd, { timeout: 30000, maxBuffer: 1024*1024*5 }, (err, stdout, stderr) => {
+      resolve({ stdout: stdout||'', stderr: stderr||(err&&err.message)||'' });
+    });
+  });
+});
+ipcMain.handle('show-in-folder', (_e, filePath) => {
+  shell.showItemInFolder(filePath);
+  return { ok: true };
+});
+
+ipcMain.handle('rename-file', (_e, { oldPath, newName }) => {
+  try {
+    const dir = path.dirname(oldPath);
+    const newPath = path.join(dir, newName);
+    fs.renameSync(oldPath, newPath);
+    return readSingleFile(newPath);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('delete-file', (_e, filePath) => {
+  try {
+    fs.unlinkSync(filePath);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('create-file', (_e, { dirPath, name }) => {
+  try {
+    // Uzantı yoksa .txt ekle
+    let safeName = (name || '').trim();
+    if (safeName && !path.extname(safeName)) safeName += '.txt';
+    if (!safeName) return { ok: false, error: 'Geçersiz dosya adı' };
+
+    // dirPath bir dizin mi kontrol et; değilse kendi dizinine düş
+    let dir = dirPath || '';
+    if (dir) {
+      try {
+        const st = fs.statSync(dir);
+        if (!st.isDirectory()) dir = path.dirname(dir);
+      } catch (e) { /* dirPath henüz yok, olduğu gibi kullan */ }
+    }
+
+    const fullPath = path.join(dir, safeName);
+
+    // Hedef yolun bir dizin olmadığından emin ol
+    try {
+      const st2 = fs.statSync(fullPath);
+      if (st2.isDirectory()) return { ok: false, error: 'Bu isimde zaten bir klasör var' };
+    } catch (e) { /* dosya yok, sorun değil */ }
+
+    fs.writeFileSync(fullPath, '', 'utf-8');
+    const result = readSingleFile(fullPath);
+    if (!result) return { ok: false, error: 'Dosya oluşturuldu ama okunamadı: ' + fullPath };
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('create-folder', (_e, { dirPath, name }) => {
+  try {
+    const fullPath = path.join(dirPath || '', name);
+    fs.mkdirSync(fullPath, { recursive: true });
+    return { ok: true, path: fullPath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('rename-folder', (_e, { oldPath, newName }) => {
+  try {
+    const dir = path.dirname(oldPath);
+    const newPath = path.join(dir, newName);
+    fs.renameSync(oldPath, newPath);
+    return { ok: true, newPath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('delete-folder', (_e, folderPath) => {
+  try {
+    fs.rmSync(folderPath, { recursive: true, force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 
 function formatMod(ms) {
   const d = Date.now()-ms, m=Math.floor(d/60000);
