@@ -476,15 +476,10 @@ function AiPanel({open,onClose,dark,t,aiConfig,onOpenSettings,selFile}){
   };
 
   // ── Öğrenme modu: plan oluştur ──────────────────────────
+  // Sonraki adımlar için ders al (tek çağrı)
   const getStepLesson=async(topic,steps,stepIdx)=>{
     const step=steps[stepIdx];
-    const sys=`Sen bir yazılım eğitmenisin. Konu: "${topic}"
-Şimdi "${step.title}" adımını öğret (adım ${stepIdx+1}/${steps.length}).
-- Adımın amacını 1-2 cümleyle açıkla
-- Gerekli kodu tam olarak göster
-- Kısaca ne yaptığını belirt
-- Türkçe yaz. Emoji kullanma.
-Kod bloklarını \`\`\`dil ... \`\`\` formatında yaz.`;
+    const sys=`Yazılım eğitmenisin. Konu:"${topic}" Adım ${stepIdx+1}/${steps.length}:"${step.title}". Kısaca açıkla, kodu göster. Türkçe. Emoji yok. \`\`\`dil...\`\`\``;
     const res=await window.electronAPI.aiChat({
       provider:aiConfig.provider,baseUrl:aiConfig.baseUrl,model:aiConfig.model,
       messages:[{role:"user",content:`${topic} — Adım ${stepIdx+1}: ${step.title}`}],
@@ -494,18 +489,8 @@ Kod bloklarını \`\`\`dil ... \`\`\` formatında yaz.`;
   };
 
   const granularityRules=(g)=>g==="atomic"
-    ? `8-16 adım arası, Türkçe, ÇOK İNCE TANELİ adımlar — her adım SADECE tek bir kod satırı ya da tek bir mikro-işlem içersin (örn. sadece bir import, sadece bir değişken/değer ataması, sadece bir fonksiyon çağrısı, sadece bir kontrol ifadesi). Birden fazla satır veya işlemi tek adımda asla birleştirme. Pratik sırayla, her adım bir öncekinin üzerine inşa edilsin.`
-    : `maksimum 7 adım, Türkçe, pratik sırayla, her adım bir öncekinin üzerine inşa edilsin.`;
-
-  const planSystemPrompt=(correction,granularity)=>correction
-    ? `Sen bir yazılım eğitmenisin. Önceki yanıtın talimata uymadı: SADECE geçerli bir JSON dizisi istenmişti, kod, açıklama veya markdown DEĞİL.
-SADECE şu formatta geçerli JSON döndür, başka hiçbir şey yazma:
-[{"id":1,"title":"Adım başlığı","brief":"Kısa açıklama"},...]
-Kurallar: ${granularityRules(granularity)}`
-    : `Sen bir yazılım eğitmenisin. Kullanıcının konuyu adım adım öğrenmesi için bir plan hazırla.
-SADECE geçerli JSON döndür, başka hiçbir şey yazma, markdown kullanma:
-[{"id":1,"title":"Adım başlığı","brief":"Kısa açıklama"},...]
-Kurallar: ${granularityRules(granularity)}`;
+    ? `8-16 ince adım, Türkçe, her adım tek işlem (1 import/atama/fonksiyon). Pratik sıra.`
+    : `max 7 adım, Türkçe, pratik sıra.`;
 
   const parsePlanSteps=(content)=>{
     const steps=parseJsonWithValidator(content,'[',']',
@@ -516,36 +501,47 @@ Kurallar: ${granularityRules(granularity)}`;
     return cleaned;
   };
 
-  const requestPlanSteps=async(topic,correction,granularity)=>{
+  // Plan + ilk ders tek çağrıda — iki ayrı AI isteği yerine bir tane
+  const initPlanAndFirstLesson=async(topic,granularity,retryJson)=>{
+    const granRules=granularityRules(granularity);
+    const sys=retryJson
+      ? `Eğitmensin. SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
+{"steps":[{"id":1,"title":"...","brief":"..."},...],"lesson":"ilk adımın açıklaması ve kodu"}
+${granRules}`
+      : `Eğitmensin. Konu için öğrenme planı ve ilk adımın dersini tek seferde ver.
+SADECE JSON döndür, başka hiçbir şey yazma:
+{"steps":[{"id":1,"title":"...","brief":"..."},...],"lesson":"ilk adımın açıklaması ve kodu"}
+${granRules}
+lesson alanı: ilk adımı Türkçe açıkla, kodu göster, emoji kullanma.`;
     const res=await window.electronAPI.aiChat({
       provider:aiConfig.provider,baseUrl:aiConfig.baseUrl,model:aiConfig.model,
       messages:[{role:"user",content:topic}],
-      system:planSystemPrompt(correction,granularity),
+      system:sys,
     });
     if(!res?.ok) throw new Error(res?.error||"bağlantı hatası");
-    return parsePlanSteps(res.content||"");
+    const parsed=parseJsonWithValidator(res.content||"",'{','}',
+      v=>v&&typeof v==='object'&&Array.isArray(v.steps)&&v.steps.length>0&&typeof v.lesson==='string');
+    if(!parsed) throw new Error("plan+ders formatı ayrıştırılamadı");
+    const steps=parsePlanSteps(JSON.stringify(parsed.steps));
+    return {steps, lesson:parsed.lesson||"İçerik yüklenemedi."};
   };
 
   const initLearnPlan=async(topic,granularity)=>{
     const myToken=++learnAbortRef.current;
     setLearnState(s=>({...s,phase:"loading",topic,validationMsg:""}));
     try{
-      let steps;
+      let steps, lesson;
       try{
-        steps=await requestPlanSteps(topic,false,granularity);
+        ({steps,lesson}=await initPlanAndFirstLesson(topic,granularity,false));
       }catch(e1){
         if(learnAbortRef.current!==myToken)return;
-        // Model talimata uymadıysa (örn. JSON yerine kod/tuple döndürdüyse) bir kez
-        // daha sıkı bir hatırlatmayla tekrar dene.
         try{
-          steps=await requestPlanSteps(topic,true,granularity);
+          ({steps,lesson}=await initPlanAndFirstLesson(topic,granularity,true));
         }catch(e2){
           throw new Error(`"${aiConfig.model}" modeli planı geçerli JSON formatında oluşturamadı. Tekrar deneyin veya ayarlardan farklı bir model seçin.`);
         }
       }
       if(learnAbortRef.current!==myToken)return;
-      const lesson=await getStepLesson(topic,steps,0);
-      if(learnAbortRef.current!==myToken)return; // lesson beklenirken sekme değişti
       const statuses=steps.map((_,i)=>i===0?"current":"pending");
       setLearnState({phase:"steps",topic,steps,currentStep:0,stepStatuses:statuses,stepLesson:lesson,validationMsg:""});
       const initMsgs=[
@@ -573,19 +569,12 @@ Kurallar: ${granularityRules(granularity)}`;
     // Normalize code: strip trailing whitespace/blank lines for comparison
     const normalizeCode=(c)=>c.split('\n').map(l=>l.trimEnd()).join('\n').replace(/\n{3,}/g,'\n\n').trim();
 
-    const sys=`Sen bir yazılım eğitmenisin. Öğrenci "${topic}" konusunu öğreniyor.
-Tamamlanması gereken adım: "${curStep.title}"
-Öğrencinin dosyası (${selFile.name}):
+    const sys=`Eğitmensin. Adım:"${curStep.title}" Dosya:${selFile.name}
 \`\`\`
-${normalizeCode(selFile.code).slice(0,3000)}
+${normalizeCode(selFile.code).slice(0,1500)}
 \`\`\`
-Bu kod "${curStep.title}" adımını doğru implement ediyor mu?
-ÖNEMLİ: Sadece boşluk, satır sonu veya yorum satırı farkları varsa DOĞRU say.
-Mantıksal yapı ve işlevsellik doğruysa geçer.
-SADECE geçerli JSON döndür, başka hiçbir şey yazma:
-{"valid":true,"feedback":"kısa açıklama"}
-veya
-{"valid":false,"feedback":"neyin eksik/yanlış olduğunu açıkla"}`;
+Bu adım implemente edilmiş mi? Boşluk/yorum farkı önemsiz. SADECE JSON:
+{"valid":true,"feedback":"..."} veya {"valid":false,"feedback":"..."}`;
     try{
       const res=await window.electronAPI.aiChat({
         provider:aiConfig.provider,baseUrl:aiConfig.baseUrl,model:aiConfig.model,
