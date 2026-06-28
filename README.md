@@ -27,7 +27,7 @@ To use a local AI model, just install [Ollama](https://ollama.com):
 ollama run <model-name>
 ```
 
-Once the model is running, select and connect it from the **Settings** screen in the app. No external API key or internet connection required — everything runs locally.
+Once the model is running, select and connect it from the **Settings** screen in the app. No external API key or internet connection required - everything runs locally.
 
 ---
 
