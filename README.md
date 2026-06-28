@@ -73,11 +73,3 @@ npm run build
 npm run build-linux
 ```
 
----
-
-## Usage
-
-1. Open the app and select a project folder from the top-left
-2. Open the AI panel on the right (chat icon)
-3. Ask questions about your project in the **Chat** tab, or type a topic in the **Learning** tab to start learning step by step
-4. Right-click in the file tree to create, rename, or delete files/folders
