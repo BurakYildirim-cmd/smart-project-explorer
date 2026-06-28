@@ -7,7 +7,7 @@ An Electron-based, AI-powered desktop code explorer. Built to quickly browse and
 ## Features
 
 -  View your project's file structure in a tree view
--  Create, rename, and delete files/folders — all from within the UI
+-  Create, rename, and delete files/folders - all from within the UI
 -  Code editor (CodeMirror) - syntax highlighting, search, line numbers
 -  In-file search and a preview strip of classes/functions/imports (click to jump to the relevant line)
 -  **AI Chat** - ask questions about your project using a local AI model
